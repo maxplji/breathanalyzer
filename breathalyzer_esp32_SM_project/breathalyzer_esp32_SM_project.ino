@@ -115,14 +115,23 @@ float obliczStosunekRezystancji(float napiecieAO, float napiecieBazowe) {
     return Rs / Rbazowe;
 }
 
-float korekcjaDHT11 (float Rs, float T, float H){
-  float F = wspolczynnikKorekcji(T, H);
+float wspolczynnikKorekcji(float T, float H);
 
-  if (isnan(F) || F<=0){
+
+float korekcjaDHT11(float stosunek, float F_bazowe,float F_aktualne) {
+
+  if (!isfinite(stosunek) ||
+      !isfinite(F_bazowe) ||
+      !isfinite(F_aktualne) ||
+      stosunek <= 0 ||
+      F_bazowe <= 0 ||
+      F_aktualne <= 0) {
     return NAN;
   }
-return Rs / F;
+
+  return stosunek * F_bazowe / F_aktualne;
 }
+
 int k;
 float wspolczynnikKorekcji(float T,  float H){
 
@@ -185,7 +194,7 @@ float F00 = korekcja[indeksH][indeksT];
 float F01 = korekcja[indeksH][indeksT +1];
 
 float F10 = korekcja[indeksH+1][indeksT];
-float f11 = korekcja[indeksH+1][indeksT+1];
+float F11 = korekcja[indeksH+1][indeksT+1];
 
 float T0 = temperatury[indeksT];
 float T1 = temperatury[indeksT + 1];
@@ -207,8 +216,57 @@ return F;
 
 }
 
+float bazoweNapiecie = NAN;
+float bazowaTemperatura = NAN;
+float bazowaWilgotnosc = NAN;
+float F_bazowe = NAN;
+
+bool skalibrowany = false;
+
+
+bool kalibracjaBazowa() {
+
+  bazowaTemperatura = dht.readTemperature();
+  bazowaWilgotnosc = dht.readHumidity();
+
+  if (isnan(bazowaTemperatura) ||
+      isnan(bazowaWilgotnosc)) {
+    return false;
+  }
+
+  F_bazowe = wspolczynnikKorekcji(
+    bazowaTemperatura,
+    bazowaWilgotnosc
+  );
+
+  if (isnan(F_bazowe)) {
+    return false;
+  }
+
+  float suma = 0;
+
+  for (int k = 0; k < 30; k++) {
+    suma += analogReadMilliVolts(PIN_A0);
+    delay(5);
+  }
+
+  bazoweNapiecie = (suma / 30.0) / 1000.0 * 2.0;
+
+  if (bazoweNapiecie <= 0 || bazoweNapiecie >= 4.8) {
+    return false;
+  }
+
+  return true;
+}
+
+
+
 void setup() {
   Serial.begin(115200);
+
+
+
+
   analogReadResolution(12);
   analogSetPinAttenuation(PIN_A0, ADC_0db);
   WiFi.mode(WIFI_STA);
@@ -245,6 +303,9 @@ if (getLocalTime(&timeinfo, 15000)) {
   delay(20000);
   bazoweADC = wyznaczBazoweADC();
 
+  kalibracjaBazowa();
+  skalibrowany = true;
+
   oled.clearDisplay();
   oled.setCursor(0, 0);
   oled.println("Gotowe!");
@@ -255,6 +316,7 @@ if (getLocalTime(&timeinfo, 15000)) {
 void loop() {
 
 unsigned long teraz = millis();
+
 
 
 if (teraz - ostatniTelegram >= botDelay) {
@@ -289,6 +351,44 @@ if(teraz - ostatniPomiar >= 2000){
   else {
     
 i++;
+
+
+
+if (skalibrowany) {
+
+  
+  float aktualneNapiecie =
+      analogReadMilliVolts(PIN_A0) / 1000.0 * 2.0;
+
+  
+  float F_aktualne =
+      wspolczynnikKorekcji(temperatura, wilgotnosc);
+
+  
+  float stosunek = obliczStosunekRezystancji(
+      aktualneNapiecie,
+      bazoweNapiecie
+  );
+
+  
+  float stosunekSkorygowany = korekcjaDHT11(
+      stosunek,
+      F_bazowe,
+      F_aktualne
+  );
+
+  if (isfinite(stosunekSkorygowany)) {
+    Serial.print("Napiecie AO: ");
+    Serial.println(aktualneNapiecie, 3);
+
+    Serial.print("Stosunek Rs/Rbazowe: ");
+    Serial.println(stosunek, 3);
+
+    Serial.print("Stosunek po korekcji: ");
+    Serial.println(stosunekSkorygowany, 3);
+  }
+}
+//float F = wspolczynnikKorekcji(temperatura, wilgotnosc);
 
 oled.clearDisplay();
 oled.setCursor(0, 0);
